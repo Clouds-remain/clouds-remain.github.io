@@ -2,6 +2,8 @@
  * Small site-level polish that does not belong to the theme package.
  * - Keeps the visible home hero to one title line while retaining the semantic h1.
  * - Replaces ShokaX's `alternate = title = subtitle` browser title with a cleaner one.
+ * - Reserves the desktop sidebar height so a short page cannot enter the
+ *   sidebar-affix <-> page-height feedback loop at the bottom (visible flashing).
  */
 
 hexo.extend.injector.register(
@@ -9,6 +11,7 @@ hexo.extend.injector.register(
   `<style>
 #brand .artboard + h1.title{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 #brand .logo + .meta{margin-top:1rem}
+@media (min-width:991px){#sidebar{min-height:100vh}}
 </style>`,
   'default'
 );
