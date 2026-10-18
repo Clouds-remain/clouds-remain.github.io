@@ -17,6 +17,24 @@ hexo.extend.injector.register(
   'default'
 );
 
+// ShokaX swaps to `assets/favicon.ico` / `assets/failure.ico` on tab visibility
+// changes. Keep the selected avatar favicon instead, while leaving the title
+// animation from the theme untouched.
+hexo.extend.injector.register(
+  'body_end',
+  `<script>
+(function () {
+  var icon = document.querySelector('link[rel="icon"]');
+  if (!icon) return;
+  var avatarIcon = icon.href;
+  new MutationObserver(function () {
+    if (icon.href !== avatarIcon) icon.href = avatarIcon;
+  }).observe(icon, { attributes: true, attributeFilter: ['href'] });
+})();
+</script>`,
+  'default'
+);
+
 hexo.extend.filter.register('after_render:html', function (str, data) {
   const page = data.page || {};
   const siteTitle = hexo.config.title;
