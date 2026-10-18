@@ -11,6 +11,7 @@ hexo.extend.injector.register(
   `<style>
 #brand .artboard + h1.title{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 #brand .logo + .meta{margin-top:1rem}
+#imgs img{object-position:64% 50%}
 @media (min-width:991px){#sidebar{min-height:100vh}}
 </style>`,
   'default'

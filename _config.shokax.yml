@@ -28,7 +28,7 @@ experiments:
 homeConfig:
   gradient: false # 使用CSS渐变作为文章封面
   # fixedCover 性能比默认的更好，且开启时将启用LCP优化和预加载
-  fixedCover: "/images/covers/cover-1.jpg" # 主页面封面；为空则使用 Bing 随机图片
+  fixedCover: "/images/background.jpg" # 主页面封面；为空则使用 Bing 随机图片
   coverConfig:
     enableCover: true # 是否开启头图
     enablePreload: true #是否开启预加载头图

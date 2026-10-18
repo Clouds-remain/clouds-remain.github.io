@@ -61,6 +61,7 @@ npx hexo new post "文章标题"
 
 - 头像：替换 `source/_data/assets/avatar.jpg` 后重新构建
 - 封面：替换 `source/images/covers/cover-1.jpg` 到 `cover-6.jpg`，并在 `source/_data/images.yml`、`images_index.yml` 中保持 6 条路径
+- 首页背景：替换 `source/images/background.jpg`
 - 首页固定封面：修改 `_config.shokax.yml` 的 `homeConfig.fixedCover`
 
 ### 开启评论
