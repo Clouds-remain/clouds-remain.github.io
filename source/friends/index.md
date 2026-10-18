@@ -7,6 +7,12 @@ description: 友情链接与站点推荐
 > 想交换友链的话，欢迎到 [GitHub](https://github.com/Clouds-remain) 找我。
 
 {% links %}
+- site: 暮歌
+  owner: 微恙
+  url: https://maxlen727.github.io/
+  image: assets/maxlen727.webp
+  desc: 自留地，不是技术 blog，仅仅用作我生活的记录
+  color: "#8b5cf6"
 - site: Clouds-remain 的 GitHub
   owner: Clouds-remain
   url: https://github.com/Clouds-remain
