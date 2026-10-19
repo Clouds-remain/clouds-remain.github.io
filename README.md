@@ -27,6 +27,42 @@ npx hexo new post "文章标题"
 
 > `npm run build` 等价于 `hexo generate && pagefind --site public`。不要只运行 `hexo generate` 后直接部署，否则搜索索引会缺失。
 
+## 一键发布
+
+双击仓库根目录的 `publish.cmd`，会打开菜单：
+
+1. 发布已修改的文章
+2. 新建文章（创建后打开 Obsidian / 记事本）
+3. 只构建预览
+4. 退出
+
+也可以直接运行：
+
+```powershell
+# 发布所有改动文章
+.\tools\publish.ps1 -All
+
+# 发布指定文章
+.\tools\publish.ps1 -File "文章标题.md"
+
+# 只检查、构建，不提交
+.\tools\publish.ps1 -DryRun
+
+# 新建文章
+.\tools\publish.ps1 -Title "新文章标题"
+```
+
+脚本包含这些 fallback：
+
+- Node/npm/Git 不在 PATH 时，自动尝试已知安装目录
+- `npm run build` 失败时，回退到 `hexo generate + pagefind`
+- `git pull` 失败时，回退到 `ghproxy.net` 镜像拉取
+- `git push` 失败时自动重试；仍失败则保留本地提交，并在 `.publish/rescue/` 生成 patch 和 bundle
+- 构建失败不会提交，避免把坏版本推上线
+- 只提交选中的文章和文章引用的本地图片，不会误提交 `.obsidian`
+- 发布锁防止同时运行两个发布进程
+- 完整日志在 `.publish/logs/`
+
 ## 配置地图
 
 | 文件 | 作用 |
@@ -51,7 +87,7 @@ npx hexo new post "文章标题"
 - 关于页 `/about/`、友链页 `/friends/`
 - 文章字数、阅读时长、站点总字数
 - 中国大陆可访问的 CDN 与系统字体，不加载 Google Fonts
-- **评论：已写好 Twikoo / Waline 配置模板，但保持关闭**
+- **评论：Twikoo 已启用（Netlify + MongoDB Atlas）**
 - **音乐播放器：保持关闭**
 - **鼠标烟花：保持关闭**
 
@@ -64,26 +100,21 @@ npx hexo new post "文章标题"
 - 首页背景：替换 `source/images/background.jpg`
 - 首页固定封面：修改 `_config.shokax.yml` 的 `homeConfig.fixedCover`
 
-### 开启评论
+### 评论维护
 
-在 `_config.shokax.yml` 中选择一种：
-
-```yaml
-# Waline
-waline:
-  enable: true
-  serverURL: "https://your-waline.example.com"
-```
+当前使用 Twikoo，后端部署在 Netlify，数据库为 MongoDB Atlas：
 
 ```yaml
-# Twikoo
 twikoo:
   enable: true
   mode: vercel
-  envId: "https://your-twikoo.example.com"
+  envId: "https://clouds-remain-twikoo.netlify.app/.netlify/functions/twikoo"
 ```
 
-两套服务都需要单独部署，主题不会替你创建后端。
+- Netlify 项目：`clouds-remain-twikoo`
+- 环境变量：`MONGODB_URI`（Netlify 环境变量中配置，仓库里不保存连接串）
+- 关闭评论：把 `twikoo.enable` 改为 `false`
+- 更换评论后端：只改 `envId`，地址必须是完整的 Twikoo 函数地址
 
 ### 开启音乐播放器
 
