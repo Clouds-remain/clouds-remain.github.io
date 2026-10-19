@@ -13,6 +13,12 @@ description: 友情链接与站点推荐
   image: assets/maxlen727.webp
   desc: 自留地，不是技术 blog，仅仅用作我生活的记录
   color: "#8b5cf6"
+- site: MinString的博客
+  owner: MinString
+  url: https://minstring.github.io/
+  image: assets/minstring.webp
+  desc: 行到水穷处，坐看云起时
+  color: "#53a3f2"
 - site: Clouds-remain 的 GitHub
   owner: Clouds-remain
   url: https://github.com/Clouds-remain
