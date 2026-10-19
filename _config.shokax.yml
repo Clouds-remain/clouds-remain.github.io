@@ -178,9 +178,9 @@ menu:
 
 # https://twikoo.js.org
 twikoo:
-  enable: false
-  mode: vercel # vercel或tencent
-  envId: "https://example.com" # twikoo环境ID,vercel填地址
+  enable: true
+  mode: vercel # vercel / Netlify 等 Serverless 部署均填写完整函数地址
+  envId: "https://clouds-remain-twikoo.netlify.app/.netlify/functions/twikoo" # Twikoo 环境地址
   region:
 
 # https://waline.js.org/
