@@ -14,6 +14,7 @@
 
     常用方式：
       .\tools\publish.ps1                 # 交互菜单
+      .\tools\publish.ps1 -Pick           # 从文章列表中选择
       .\tools\publish.ps1 -All            # 发布所有改动文章
       .\tools\publish.ps1 -File "文章标题.md"
       .\tools\publish.ps1 -DryRun         # 只构建和检查，不提交
@@ -25,6 +26,7 @@ param(
     [string]$Title,
     [string[]]$File,
     [switch]$All,
+    [switch]$Pick,
     [switch]$New,
     [switch]$DryRun,
     [switch]$NoPush
@@ -48,6 +50,7 @@ $script:Npm = $null
 $script:Npx = $null
 $script:Node = $null
 $script:StartTime = Get-Date
+$script:UsePicker = $false
 
 New-Item -ItemType Directory -Force -Path $script:LogDir | Out-Null
 New-Item -ItemType Directory -Force -Path $script:RescueDir | Out-Null
@@ -292,11 +295,123 @@ function Get-ChangedPosts {
     return @($posts | Select-Object -Unique)
 }
 
+function Get-PostDate {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return '' }
+    $lines = @(Get-Content -LiteralPath $Path -TotalCount 40 -Encoding UTF8)
+    foreach ($line in $lines) {
+        if ($line -match '^date:\s*(.+?)\s*$') { return $Matches[1].Trim().Trim('"').Trim("'") }
+    }
+    return (Get-Item -LiteralPath $Path).LastWriteTime.ToString('yyyy-MM-dd')
+}
+
+function Get-PostStatusMap {
+    $map = @{}
+    $lines = @(& $script:Git -C $script:RepoRoot -c core.quotepath=false status --porcelain -- source/_posts 2>$null)
+    foreach ($line in $lines) {
+        if ($line.Length -lt 4) { continue }
+        $path = $line.Substring(3).Trim()
+        if ($path -match '^"(.*)"$') { $path = $Matches[1] }
+        if ($path -match ' -> ') { $path = ($path -split ' -> ')[-1].Trim('"') }
+        if ($path -notmatch '\.md$') { continue }
+        $full = [IO.Path]::GetFullPath((Join-Path $script:RepoRoot $path))
+        $map[$full] = $line.Substring(0, 2)
+    }
+    return $map
+}
+
+function Show-PostPicker {
+    $postFiles = @(Get-ChildItem -LiteralPath $script:PostsDir -Filter '*.md' -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending)
+    if ($postFiles.Count -eq 0) { Fail 'source/_posts 下没有 Markdown 文章。' }
+
+    $statusMap = Get-PostStatusMap
+    Write-Host ''
+    Write-Host '========================================' -ForegroundColor Cyan
+    Write-Host '  选择要发布的文章' -ForegroundColor Cyan
+    Write-Host '========================================' -ForegroundColor Cyan
+    Write-Host '  [新] 新文章   [改] 已修改   [  ] 无改动' -ForegroundColor DarkGray
+    Write-Host ''
+
+    for ($i = 0; $i -lt $postFiles.Count; $i++) {
+        $item = $postFiles[$i]
+        $full = $item.FullName
+        $status = '    '
+        $color = 'Gray'
+        if ($statusMap.ContainsKey($full)) {
+            $gitStatus = $statusMap[$full]
+            if ($gitStatus -eq '??') {
+                $status = '[新]'
+                $color = 'Green'
+            } elseif ($gitStatus -match 'D') {
+                $status = '[删]'
+                $color = 'Red'
+            } else {
+                $status = '[改]'
+                $color = 'Yellow'
+            }
+        }
+
+        $title = Get-PostTitle $full
+        $date = Get-PostDate $full
+        $fileName = [IO.Path]::GetFileNameWithoutExtension($full)
+        $label = $title
+        if ($title -ne $fileName) { $label = "$title  [$fileName]" }
+        Write-Host ("{0,3}. {1} {2}  {3}" -f ($i + 1), $status, $date, $label) -ForegroundColor $color
+    }
+
+    Write-Host ''
+    Write-Host '输入编号：1,3,5 或 1-3；a = 全选；0 = 取消' -ForegroundColor Cyan
+    $answer = Read-Host '要发布哪些文章？'
+    if ([string]::IsNullOrWhiteSpace($answer) -or $answer.Trim() -eq '0') {
+        return @()
+    }
+    if ($answer.Trim() -match '^(a|all)$') {
+        return @($postFiles | ForEach-Object { $_.FullName })
+    }
+
+    $indices = @()
+    foreach ($token in ($answer -split '[,，\s]+')) {
+        if ([string]::IsNullOrWhiteSpace($token)) { continue }
+        if ($token -match '^(\d+)\s*-\s*(\d+)$') {
+            $start = [int]$Matches[1]
+            $end = [int]$Matches[2]
+            if ($start -gt $end) { $tmp = $start; $start = $end; $end = $tmp }
+            for ($n = $start; $n -le $end; $n++) { $indices += $n }
+        } elseif ($token -match '^\d+$') {
+            $indices += [int]$token
+        } else {
+            Write-Log ("忽略无效编号：{0}" -f $token) 'WARN'
+        }
+    }
+
+    $selected = @()
+    foreach ($n in @($indices | Sort-Object -Unique)) {
+        if ($n -lt 1 -or $n -gt $postFiles.Count) {
+            Write-Log ("编号超出范围，已忽略：{0}" -f $n) 'WARN'
+            continue
+        }
+        $selected += $postFiles[$n - 1].FullName
+    }
+
+    if ($selected.Count -eq 0) {
+        Write-Log '没有选择有效文章。' 'WARN'
+    } else {
+        Write-Log ("已选择 {0} 篇文章：" -f $selected.Count) 'OK'
+        foreach ($p in $selected) { Write-Log ("  - {0}" -f (Split-Path $p -Leaf)) 'INFO' }
+    }
+    return @($selected | Select-Object -Unique)
+}
+
 function Select-Posts {
     if ($File -and $File.Count -gt 0) {
         $posts = @()
         foreach ($f in $File) { $posts += Resolve-PostPath $f }
         return @($posts | Select-Object -Unique)
+    }
+
+    if ($Pick -or $script:UsePicker) {
+        return Show-PostPicker
     }
 
     $changed = Get-ChangedPosts
@@ -522,12 +637,13 @@ function Show-Menu {
     Write-Host '========================================' -ForegroundColor Cyan
     Write-Host '  Clouds-remain 一键发布' -ForegroundColor Cyan
     Write-Host '========================================' -ForegroundColor Cyan
-    Write-Host '  1. 发布已修改的文章'
-    Write-Host '  2. 新建文章（创建后打开编辑器）'
-    Write-Host '  3. 只构建预览，不发布'
-    Write-Host '  4. 退出'
+    Write-Host '  1. 从列表选择文章发布'
+    Write-Host '  2. 发布全部改动文章'
+    Write-Host '  3. 新建文章（创建后打开编辑器）'
+    Write-Host '  4. 只构建预览，不发布'
+    Write-Host '  5. 退出'
     Write-Host ''
-    return (Read-Host '请选择 [1-4]')
+    return (Read-Host '请选择 [1-5]')
 }
 
 # ---------------------------------------------------------------------------
@@ -543,12 +659,13 @@ try {
     Acquire-Lock
 
     $mode = 'publish'
-    if (-not $Title -and -not $New -and -not $File -and -not $All -and -not $DryRun -and -not $NoPush) {
+    if (-not $Title -and -not $New -and -not $File -and -not $All -and -not $Pick -and -not $DryRun -and -not $NoPush) {
         $choice = Show-Menu
         switch ($choice) {
-            '1' { $mode = 'publish' }
-            '2' { New-BlogPost; return }
-            '3' { $mode = 'build-only' }
+            '1' { $mode = 'publish'; $script:UsePicker = $true }
+            '2' { $mode = 'publish' }
+            '3' { New-BlogPost; return }
+            '4' { $mode = 'build-only' }
             default { Write-Log '已退出。' 'INFO'; return }
         }
     }

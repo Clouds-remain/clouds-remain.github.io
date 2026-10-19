@@ -31,14 +31,18 @@ npx hexo new post "文章标题"
 
 双击仓库根目录的 `publish.cmd`，会打开菜单：
 
-1. 发布已修改的文章
-2. 新建文章（创建后打开 Obsidian / 记事本）
-3. 只构建预览
-4. 退出
+1. 从列表选择文章发布
+2. 发布全部改动文章
+3. 新建文章（创建后打开 Obsidian / 记事本）
+4. 只构建预览
+5. 退出
 
 也可以直接运行：
 
 ```powershell
+# 从文章列表中选择
+.\tools\publish.ps1 -Pick
+
 # 发布所有改动文章
 .\tools\publish.ps1 -All
 
