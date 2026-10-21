@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 
 $script:RepoRoot = Split-Path -Parent $PSScriptRoot
 $script:Core = Join-Path $PSScriptRoot 'publish.ps1'
-$script:Icon = Join-Path $PSScriptRoot 'publisher-v2.ico'
+$script:Icon = Join-Path $PSScriptRoot 'publisher-v3.ico'
 $script:Version = '1.1.0'
 $script:PowerShell = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
 if (-not $script:PowerShell) { $script:PowerShell = Join-Path $PSHOME 'powershell.exe' }
@@ -134,7 +134,13 @@ function Install-Shortcut {
     $desktop = [Environment]::GetFolderPath('Desktop')
     $startDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 
-    $target = Join-Path $script:RepoRoot 'publish.cmd'
+    $exe = Join-Path $script:RepoRoot 'tools\CloudsRemainPublisher.exe'
+    $target = $exe
+    $iconLocation = "$exe,0"
+    if (-not (Test-Path -LiteralPath $target)) {
+        $target = Join-Path $script:RepoRoot 'publish.cmd'
+        $iconLocation = "$script:Icon,0"
+    }
     if (-not (Test-Path -LiteralPath $target)) {
         Write-Host "找不到启动文件：$target" -ForegroundColor Red
         return
@@ -157,15 +163,16 @@ function Install-Shortcut {
         foreach ($shortcutPath in $paths) {
             $shortcut = $shell.CreateShortcut($shortcutPath)
             $shortcut.TargetPath = $target
+            $shortcut.Arguments = ''
             $shortcut.WorkingDirectory = $script:RepoRoot
-            $shortcut.IconLocation = "$script:Icon,0"
+            $shortcut.IconLocation = $iconLocation
             $shortcut.Description = 'Clouds-remain 博客发布中心'
             $shortcut.WindowStyle = 1
             $shortcut.Save()
             Write-Host "快捷方式已创建：$shortcutPath" -ForegroundColor Green
         }
         Write-Host '图标：' -NoNewline
-        Write-Host $script:Icon -ForegroundColor Cyan
+        Write-Host $iconLocation -ForegroundColor Cyan
     } catch {
         Write-Host "创建快捷方式失败：$($_.Exception.Message)" -ForegroundColor Red
     } finally {
