@@ -34,8 +34,9 @@ npx hexo new post "文章标题"
 1. 从列表选择文章发布
 2. 发布全部改动文章
 3. 新建文章（创建后打开 Obsidian / 记事本）
-4. 只构建预览
-5. 退出
+4. 设置/更换文章封面并发布
+5. 只构建预览
+6. 退出
 
 也可以直接运行：
 
@@ -49,12 +50,41 @@ npx hexo new post "文章标题"
 # 发布指定文章
 .\tools\publish.ps1 -File "文章标题.md"
 
+# 给指定文章设置封面并发布
+.\tools\publish.ps1 -File "文章标题.md" -CoverImage "D:\图片\cover.jpg"
+
 # 只检查、构建，不提交
 .\tools\publish.ps1 -DryRun
 
 # 新建文章
 .\tools\publish.ps1 -Title "新文章标题"
 ```
+
+## 自定义文章封面
+
+每篇文章的卡片封面由 front matter 的 `cover` 决定：
+
+```yaml
+---
+title: 文章标题
+cover: images/posts/文章标题-cover.jpg
+---
+```
+
+图片放在 `source/images/posts/`。注意：
+
+- `cover` 路径**不要**以 `/` 开头
+- 推荐 16:9 或 3:2，宽度 1200px 以上
+- 支持 jpg / png / webp
+
+也可以在 Obsidian 里只做两件事：
+
+1. 把封面图片放到 `source/images/posts/`
+2. 在文章 front matter 加一行 `cover: images/posts/xxx.jpg`
+
+发布脚本会自动检测并暂存这个封面图片。
+
+不想手动找路径时，双击 `publish.cmd` 选择 **4. 设置/更换文章封面并发布**，脚本会列出文章、弹出文件选择框，自动复制图片、写入 `cover`，然后继续发布。
 
 脚本包含这些 fallback：
 

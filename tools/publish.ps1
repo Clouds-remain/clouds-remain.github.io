@@ -17,6 +17,7 @@
       .\tools\publish.ps1 -Pick           # 从文章列表中选择
       .\tools\publish.ps1 -All            # 发布所有改动文章
       .\tools\publish.ps1 -File "文章标题.md"
+      .\tools\publish.ps1 -File "文章标题.md" -CoverImage "D:\图片\cover.jpg"
       .\tools\publish.ps1 -DryRun         # 只构建和检查，不提交
       .\tools\publish.ps1 -NoPush         # 提交但不推送
       .\tools\publish.ps1 -Title "新文章" # 新建文章并打开编辑器
@@ -25,6 +26,7 @@
 param(
     [string]$Title,
     [string[]]$File,
+    [string]$CoverImage,
     [switch]$All,
     [switch]$Pick,
     [switch]$New,
@@ -321,6 +323,8 @@ function Get-PostStatusMap {
 }
 
 function Show-PostPicker {
+    param([switch]$Single)
+
     $postFiles = @(Get-ChildItem -LiteralPath $script:PostsDir -Filter '*.md' -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending)
     if ($postFiles.Count -eq 0) { Fail 'source/_posts 下没有 Markdown 文章。' }
@@ -367,6 +371,10 @@ function Show-PostPicker {
         return @()
     }
     if ($answer.Trim() -match '^(a|all)$') {
+        if ($Single) {
+            Write-Log '这个操作只能选择一篇文章，请重新运行并输入单个编号。' 'WARN'
+            return @()
+        }
         return @($postFiles | ForEach-Object { $_.FullName })
     }
 
@@ -396,6 +404,9 @@ function Show-PostPicker {
 
     if ($selected.Count -eq 0) {
         Write-Log '没有选择有效文章。' 'WARN'
+    } elseif ($Single -and $selected.Count -gt 1) {
+        Write-Log '这个操作只能选择一篇文章，已取消。' 'WARN'
+        return @()
     } else {
         Write-Log ("已选择 {0} 篇文章：" -f $selected.Count) 'OK'
         foreach ($p in $selected) { Write-Log ("  - {0}" -f (Split-Path $p -Leaf)) 'INFO' }
@@ -493,17 +504,123 @@ function Get-RelatedImages {
     foreach ($post in $Posts) {
         if (-not (Test-Path -LiteralPath $post)) { continue }
         $content = Get-Content -LiteralPath $post -Raw -Encoding UTF8
+
+        # 文章正文中的本地图片
         $matches = [regex]::Matches($content, '!\[[^\]]*\]\((/images/[^)\s]+)\)')
         foreach ($m in $matches) {
             $rel = $m.Groups[1].Value.TrimStart('/').Replace('/', '\')
-            $full = Join-Path $script:RepoRoot $rel
+            $full = Join-Path (Join-Path $script:RepoRoot 'source') $rel
             if (-not (Test-Path -LiteralPath $full)) {
                 Fail "文章引用了不存在的图片：$($m.Groups[1].Value)"
             }
             $images += $full
         }
+
+        # front matter 里的封面
+        $coverMatches = [regex]::Matches($content, '(?m)^cover:\s*([^\r\n]+)')
+        foreach ($m in $coverMatches) {
+            $coverPath = $m.Groups[1].Value.Trim().Trim('"').Trim("'")
+            if (-not $coverPath) { continue }
+            if ($coverPath -match '^(https?:)?//') { continue }
+            $rel = $coverPath.TrimStart('/').Replace('/', '\')
+            $full = Join-Path (Join-Path $script:RepoRoot 'source') $rel
+            if (-not (Test-Path -LiteralPath $full)) {
+                Fail "文章封面不存在：$coverPath"
+            }
+            $images += $full
+        }
     }
     return @($images | Select-Object -Unique)
+}
+
+function Set-PostCover {
+    param(
+        [string]$PostPath,
+        [string]$ImagePath
+    )
+
+    if (-not (Test-Path -LiteralPath $PostPath)) { Fail "文章不存在：$PostPath" }
+    if (-not (Test-Path -LiteralPath $ImagePath)) { Fail "封面图片不存在：$ImagePath" }
+
+    $ext = [IO.Path]::GetExtension($ImagePath).ToLowerInvariant()
+    if (@('.jpg', '.jpeg', '.png', '.webp', '.gif') -notcontains $ext) {
+        Fail "不支持的封面格式：$ext（支持 jpg/jpeg/png/webp/gif）"
+    }
+
+    $postsImageDir = Join-Path $script:ImagesDir 'posts'
+    New-Item -ItemType Directory -Force -Path $postsImageDir | Out-Null
+
+    $base = [IO.Path]::GetFileNameWithoutExtension($PostPath)
+    foreach ($ch in [IO.Path]::GetInvalidFileNameChars()) { $base = $base.Replace($ch, '-') }
+    $base = $base.Trim().TrimEnd('.')
+    if (-not $base) { $base = 'post' }
+
+    $fileName = "$base-cover$ext"
+    $dest = Join-Path $postsImageDir $fileName
+    $srcFull = [IO.Path]::GetFullPath($ImagePath)
+    $destFull = [IO.Path]::GetFullPath($dest)
+    if ($srcFull -ne $destFull) {
+        Copy-Item -LiteralPath $ImagePath -Destination $dest -Force
+    }
+
+    $relative = "images/posts/$fileName"
+    $text = [IO.File]::ReadAllText($PostPath, [Text.Encoding]::UTF8)
+    $lines = @($text -split "`r?`n")
+
+    if ($lines.Count -lt 2 -or $lines[0].TrimStart([char]0xFEFF).Trim() -ne '---') {
+        Fail "文章缺少 front matter：$PostPath"
+    }
+
+    $end = -1
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].Trim() -eq '---') { $end = $i; break }
+    }
+    if ($end -lt 0) { Fail "文章 front matter 没有结束标记：$PostPath" }
+
+    $coverLine = "cover: $relative"
+    $found = $false
+    for ($i = 1; $i -lt $end; $i++) {
+        if ($lines[$i] -match '^cover:\s*') {
+            $lines[$i] = $coverLine
+            $found = $true
+            break
+        }
+    }
+    if (-not $found) {
+        $before = @()
+        if ($end -gt 0) { $before = @($lines[0..($end - 1)]) }
+        $after = @($lines[$end..($lines.Count - 1)])
+        $lines = @($before + $coverLine + $after)
+    }
+
+    $newText = ($lines -join "`r`n").TrimEnd("`r", "`n") + "`r`n"
+    [IO.File]::WriteAllText($PostPath, $newText, (New-Object System.Text.UTF8Encoding($false)))
+    return $relative
+}
+
+function Set-CoverInteractive {
+    $picked = @(Show-PostPicker -Single)
+    if ($picked.Count -eq 0) { return $null }
+    $post = $picked[0]
+
+    try {
+        Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    } catch {
+        Fail '无法打开文件选择窗口（System.Windows.Forms 不可用）。请使用 -CoverImage 参数。'
+    }
+
+    $dialog = New-Object System.Windows.Forms.OpenFileDialog
+    $dialog.Title = '选择文章封面图片'
+    $dialog.Filter = '图片|*.jpg;*.jpeg;*.png;*.webp;*.gif|所有文件|*.*'
+    $dialog.Multiselect = $false
+    if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
+        Write-Log '已取消选择封面。' 'WARN'
+        return $null
+    }
+
+    $relative = Set-PostCover $post $dialog.FileName
+    Write-Log ("封面已设置：{0}" -f $relative) 'OK'
+    return $post
 }
 
 # ---------------------------------------------------------------------------
@@ -535,7 +652,7 @@ function New-BlogPost {
     [IO.File]::WriteAllText($path, $body, $utf8)
 
     Write-Log "已创建：$path" 'OK'
-    Write-Log '请写完后重新运行脚本，选择「发布已修改的文章」。' 'INFO'
+    Write-Log '请写完后重新运行脚本，选择「从列表选择文章发布」。' 'INFO'
 
     try {
         Start-Process "obsidian://open?path=$([Uri]::EscapeDataString($path))"
@@ -548,6 +665,7 @@ function New-BlogPost {
             Write-Log "请手动打开：$path" 'WARN'
         }
     }
+    return $path
 }
 
 # ---------------------------------------------------------------------------
@@ -640,10 +758,11 @@ function Show-Menu {
     Write-Host '  1. 从列表选择文章发布'
     Write-Host '  2. 发布全部改动文章'
     Write-Host '  3. 新建文章（创建后打开编辑器）'
-    Write-Host '  4. 只构建预览，不发布'
-    Write-Host '  5. 退出'
+    Write-Host '  4. 设置/更换文章封面并发布'
+    Write-Host '  5. 只构建预览，不发布'
+    Write-Host '  6. 退出'
     Write-Host ''
-    return (Read-Host '请选择 [1-5]')
+    return (Read-Host '请选择 [1-6]')
 }
 
 # ---------------------------------------------------------------------------
@@ -659,20 +778,39 @@ try {
     Acquire-Lock
 
     $mode = 'publish'
-    if (-not $Title -and -not $New -and -not $File -and -not $All -and -not $Pick -and -not $DryRun -and -not $NoPush) {
+    if (-not $Title -and -not $New -and -not $File -and -not $All -and -not $Pick -and -not $CoverImage -and -not $DryRun -and -not $NoPush) {
         $choice = Show-Menu
         switch ($choice) {
             '1' { $mode = 'publish'; $script:UsePicker = $true }
             '2' { $mode = 'publish' }
-            '3' { New-BlogPost; return }
-            '4' { $mode = 'build-only' }
+            '3' { $null = New-BlogPost; return }
+            '4' {
+                $coverPost = Set-CoverInteractive
+                if (-not $coverPost) { return }
+                $File = @($coverPost)
+                $mode = 'publish'
+            }
+            '5' { $mode = 'build-only' }
             default { Write-Log '已退出。' 'INFO'; return }
         }
     }
 
     if ($Title -or $New) {
-        New-BlogPost
+        $newPost = New-BlogPost
+        if ($CoverImage -and $newPost) {
+            $null = Set-PostCover $newPost $CoverImage
+            Write-Log ("封面已设置：$CoverImage" ) 'OK'
+        }
         return
+    }
+
+    if ($CoverImage) {
+        if (-not $File -or $File.Count -ne 1) {
+            Fail '使用 -CoverImage 时必须同时用 -File 指定一篇文章。'
+        }
+        $coverPost = Resolve-PostPath $File[0]
+        $null = Set-PostCover $coverPost $CoverImage
+        $File = @($coverPost)
     }
 
     if ($mode -eq 'build-only') {
@@ -713,7 +851,13 @@ try {
     }
 
     # 只 add 选中的文章和文章引用的本地图片
-    $stagePaths = @($posts + $images)
+    # 注意：PowerShell 会把单元素数组展开成字符串，必须显式重建数组，
+    # 否则 @($posts + $images) 会变成两个路径的字符串拼接。
+    $stagePaths = @()
+    foreach ($p in @($posts)) { $stagePaths += $p }
+    foreach ($p in @($images)) { $stagePaths += $p }
+    $stagePaths = @($stagePaths | Select-Object -Unique)
+
     $relative = @()
     foreach ($p in $stagePaths) {
         $rel = $p.Substring($script:RepoRoot.Length).TrimStart([char[]]@('\', '/'))
