@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 
 $script:RepoRoot = Split-Path -Parent $PSScriptRoot
 $script:Core = Join-Path $PSScriptRoot 'publish.ps1'
-$script:Icon = Join-Path $PSScriptRoot 'publisher.ico'
+$script:Icon = Join-Path $PSScriptRoot 'publisher-v2.ico'
 $script:Version = '1.1.0'
 $script:PowerShell = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
 if (-not $script:PowerShell) { $script:PowerShell = Join-Path $PSHOME 'powershell.exe' }
