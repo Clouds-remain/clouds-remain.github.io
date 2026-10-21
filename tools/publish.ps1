@@ -30,6 +30,8 @@ param(
     [switch]$All,
     [switch]$Pick,
     [switch]$New,
+    [switch]$CoverInteractive,
+    [switch]$BuildOnly,
     [switch]$DryRun,
     [switch]$NoPush
 )
@@ -778,7 +780,7 @@ try {
     Acquire-Lock
 
     $mode = 'publish'
-    if (-not $Title -and -not $New -and -not $File -and -not $All -and -not $Pick -and -not $CoverImage -and -not $DryRun -and -not $NoPush) {
+    if (-not $Title -and -not $New -and -not $File -and -not $All -and -not $Pick -and -not $CoverImage -and -not $CoverInteractive -and -not $BuildOnly -and -not $DryRun -and -not $NoPush) {
         $choice = Show-Menu
         switch ($choice) {
             '1' { $mode = 'publish'; $script:UsePicker = $true }
@@ -793,6 +795,16 @@ try {
             '5' { $mode = 'build-only' }
             default { Write-Log '已退出。' 'INFO'; return }
         }
+    }
+
+    if ($BuildOnly) {
+        $mode = 'build-only'
+    }
+
+    if ($CoverInteractive) {
+        $coverPost = Set-CoverInteractive
+        if (-not $coverPost) { return }
+        $File = @($coverPost)
     }
 
     if ($Title -or $New) {
