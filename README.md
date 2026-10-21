@@ -47,6 +47,8 @@ npx hexo new post "文章标题"
 
 操作结束后会回到菜单，不会用一次就退出。发布中心由 `tools/launcher.ps1` 实现，实际发布逻辑仍在 `tools/publish.ps1`。
 
+菜单 `[10]` 会同时创建桌面快捷方式和开始菜单快捷方式。如果桌面图标太多找不到，可以在开始菜单搜索 **Clouds-remain**。
+
 也可以直接运行核心脚本：
 
 ```powershell

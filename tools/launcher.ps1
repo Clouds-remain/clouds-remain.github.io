@@ -132,10 +132,7 @@ function Show-Status {
 
 function Install-Shortcut {
     $desktop = [Environment]::GetFolderPath('Desktop')
-    if (-not $desktop -or -not (Test-Path -LiteralPath $desktop)) {
-        Write-Host '找不到桌面目录。' -ForegroundColor Red
-        return
-    }
+    $startDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 
     $target = Join-Path $script:RepoRoot 'publish.cmd'
     if (-not (Test-Path -LiteralPath $target)) {
@@ -143,19 +140,30 @@ function Install-Shortcut {
         return
     }
 
-    $shortcutPath = Join-Path $desktop 'Clouds-remain 发布中心.lnk'
+    $paths = @()
+    if ($desktop -and (Test-Path -LiteralPath $desktop)) {
+        $paths += (Join-Path $desktop 'Clouds-remain 发布中心.lnk')
+    }
+    if (Test-Path -LiteralPath $startDir) {
+        $paths += (Join-Path $startDir 'Clouds-remain 发布中心.lnk')
+    }
+    if ($paths.Count -eq 0) {
+        Write-Host '找不到桌面或开始菜单目录。' -ForegroundColor Red
+        return
+    }
+
     $shell = New-Object -ComObject WScript.Shell
     try {
-        $shortcut = $shell.CreateShortcut($shortcutPath)
-        $shortcut.TargetPath = $target
-        $shortcut.WorkingDirectory = $script:RepoRoot
-        $shortcut.IconLocation = "$script:Icon,0"
-        $shortcut.Description = 'Clouds-remain 博客发布中心'
-        $shortcut.WindowStyle = 1
-        $shortcut.Save()
-        Write-Host ''
-        Write-Host '桌面快捷方式已创建：' -ForegroundColor Green
-        Write-Host "  $shortcutPath"
+        foreach ($shortcutPath in $paths) {
+            $shortcut = $shell.CreateShortcut($shortcutPath)
+            $shortcut.TargetPath = $target
+            $shortcut.WorkingDirectory = $script:RepoRoot
+            $shortcut.IconLocation = "$script:Icon,0"
+            $shortcut.Description = 'Clouds-remain 博客发布中心'
+            $shortcut.WindowStyle = 1
+            $shortcut.Save()
+            Write-Host "快捷方式已创建：$shortcutPath" -ForegroundColor Green
+        }
         Write-Host '图标：' -NoNewline
         Write-Host $script:Icon -ForegroundColor Cyan
     } catch {
