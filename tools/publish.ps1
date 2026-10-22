@@ -681,14 +681,22 @@ function Get-RemoteSlug {
     return $null
 }
 
+function Stop-RebaseIfNeeded {
+    $merge = Join-Path $script:RepoRoot '.git\rebase-merge'
+    $apply = Join-Path $script:RepoRoot '.git\rebase-apply'
+    if ((Test-Path -LiteralPath $merge) -or (Test-Path -LiteralPath $apply)) {
+        $null = & $script:Git -C $script:RepoRoot rebase --abort 2>$null
+    }
+}
+
 function Invoke-Pull {
     $env:GCM_INTERACTIVE = 'never'
     $env:GIT_TERMINAL_PROMPT = '0'
 
-    $code = Invoke-Native $script:Git @('-C', $script:RepoRoot, 'pull', '--rebase', 'origin', 'main') 'git pull --rebase'
+    $code = Invoke-Native $script:Git @('-C', $script:RepoRoot, 'pull', '--rebase', '--autostash', 'origin', 'main') 'git pull --rebase --autostash'
     if ($code -eq 0) { return $true }
 
-    $null = & $script:Git -C $script:RepoRoot rebase --abort 2>$null
+    Stop-RebaseIfNeeded
     Write-Log '直连拉取失败，尝试 ghproxy 镜像拉取 ...' 'WARN'
     $slug = Get-RemoteSlug
     if (-not $slug) {
@@ -704,9 +712,9 @@ function Invoke-Pull {
         $code = Invoke-Native $script:Git @('-C', $script:RepoRoot, 'fetch', '__publish_mirror', 'main') 'git fetch mirror'
         if ($code -ne 0) { return $false }
 
-        $code = Invoke-Native $script:Git @('-C', $script:RepoRoot, 'rebase', '__publish_mirror/main') 'git rebase mirror/main'
+        $code = Invoke-Native $script:Git @('-C', $script:RepoRoot, 'rebase', '--autostash', '__publish_mirror/main') 'git rebase --autostash mirror/main'
         if ($code -ne 0) {
-            $null = & $script:Git -C $script:RepoRoot rebase --abort 2>$null
+            Stop-RebaseIfNeeded
             Write-Log '镜像拉取后发生冲突，已中止 rebase；本地提交仍然保留。' 'ERROR'
             return $false
         }
