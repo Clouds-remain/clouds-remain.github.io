@@ -890,23 +890,36 @@ try {
     if ($code -ne 0) { Fail 'git add 失败。' }
 
     & $script:Git -C $script:RepoRoot diff --cached --quiet 2>$null
+    $alreadyCommitted = $false
+    $commitSha = ''
     if ($LASTEXITCODE -eq 0) {
-        Write-Log '暂存区没有变更，可能文章内容与已提交版本一致。' 'WARN'
-        return
+        $aheadText = (& $script:Git -C $script:RepoRoot rev-list --count 'origin/main..HEAD' 2>$null).Trim()
+        $aheadCount = 0
+        [void][int]::TryParse($aheadText, [ref]$aheadCount)
+        if ($aheadCount -gt 0) {
+            $alreadyCommitted = $true
+            $commitSha = (& $script:Git -C $script:RepoRoot rev-parse HEAD).Trim()
+            Write-Log "暂存区没有新变更，但本地有 $aheadCount 个提交尚未推送，继续同步并推送。" 'WARN'
+        } else {
+            Write-Log '暂存区没有变更，文章和封面已经提交且远端已同步。' 'WARN'
+            return
+        }
     }
 
-    $message = if ($titles.Count -eq 1) { "post: $commitTitle" } else { "posts: $commitTitle" }
+    if (-not $alreadyCommitted) {
+        $message = if ($titles.Count -eq 1) { "post: $commitTitle" } else { "posts: $commitTitle" }
 
-    $userName = (& $script:Git -C $script:RepoRoot config user.name 2>$null).Trim()
-    $userEmail = (& $script:Git -C $script:RepoRoot config user.email 2>$null).Trim()
-    if (-not $userName) { $null = & $script:Git -C $script:RepoRoot config user.name 'Clouds-remain' }
-    if (-not $userEmail) { $null = & $script:Git -C $script:RepoRoot config user.email 'Clouds-remain@users.noreply.github.com' }
+        $userName = (& $script:Git -C $script:RepoRoot config user.name 2>$null).Trim()
+        $userEmail = (& $script:Git -C $script:RepoRoot config user.email 2>$null).Trim()
+        if (-not $userName) { $null = & $script:Git -C $script:RepoRoot config user.name 'Clouds-remain' }
+        if (-not $userEmail) { $null = & $script:Git -C $script:RepoRoot config user.email 'Clouds-remain@users.noreply.github.com' }
 
-    $code = Invoke-Native $script:Git @('-C', $script:RepoRoot, 'commit', '-m', $message) 'git commit'
-    if ($code -ne 0) { Fail 'git commit 失败，请检查 Git 用户配置或冲突。' }
+        $code = Invoke-Native $script:Git @('-C', $script:RepoRoot, 'commit', '-m', $message) 'git commit'
+        if ($code -ne 0) { Fail 'git commit 失败，请检查 Git 用户配置或冲突。' }
 
-    $commitSha = (& $script:Git -C $script:RepoRoot rev-parse HEAD).Trim()
-    Write-Log "已提交：$commitSha" 'OK'
+        $commitSha = (& $script:Git -C $script:RepoRoot rev-parse HEAD).Trim()
+        Write-Log "已提交：$commitSha" 'OK'
+    }
 
     if ($NoPush) {
         Write-Log '已按 -NoPush 停止，未拉取、未推送。' 'WARN'
