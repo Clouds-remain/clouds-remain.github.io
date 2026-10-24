@@ -18,6 +18,7 @@
       .\tools\publish.ps1 -All            # 发布所有改动文章
       .\tools\publish.ps1 -File "文章标题.md"
       .\tools\publish.ps1 -File "文章标题.md" -CoverImage "D:\图片\cover.jpg"
+      .\tools\publish.ps1 -Edit           # 选一篇已发布文章，改完再发布
       .\tools\publish.ps1 -DryRun         # 只构建和检查，不提交
       .\tools\publish.ps1 -NoPush         # 提交但不推送
       .\tools\publish.ps1 -Title "新文章" # 新建文章并打开编辑器
@@ -30,6 +31,7 @@ param(
     [switch]$All,
     [switch]$Pick,
     [switch]$New,
+    [switch]$Edit,
     [switch]$CoverInteractive,
     [switch]$BuildOnly,
     [switch]$DryRun,
@@ -55,6 +57,8 @@ $script:Npx = $null
 $script:Node = $null
 $script:StartTime = Get-Date
 $script:UsePicker = $false
+# 提交信息前缀：新文章 post，修改已发布文章 edit
+$script:CommitAction = 'post'
 
 New-Item -ItemType Directory -Force -Path $script:LogDir | Out-Null
 New-Item -ItemType Directory -Force -Path $script:RescueDir | Out-Null
@@ -324,17 +328,116 @@ function Get-PostStatusMap {
     return $map
 }
 
+function Get-RelativeRepoPath {
+    param([string]$Path)
+    $rel = $Path.Substring($script:RepoRoot.Length).TrimStart([char[]]@('\', '/'))
+    return $rel
+}
+
+# 已经在仓库里跟踪过的文章 = 已经发布过（或至少提交过）的文章
+function Get-PublishedPostSet {
+    $set = @{}
+    # git 的 warning 走 stderr；在 $ErrorActionPreference='Stop' 下会被当成终止异常
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $lines = @(& $script:Git -C $script:RepoRoot -c core.quotepath=false ls-tree -r --name-only HEAD -- source/_posts 2>$null)
+    $ErrorActionPreference = $prevEap
+    foreach ($line in $lines) {
+        $t = $line.Trim()
+        if (-not $t) { continue }
+        $set[$t.Replace('/', '\').ToLowerInvariant()] = $true
+    }
+    return $set
+}
+
+# 统计一篇文章相对 HEAD 的改动量，并检测 front matter 的 title 是否被改过
+function Get-PostChangeSummary {
+    param([string]$Path)
+
+    # git 的 warning 走 stderr；在 $ErrorActionPreference='Stop' 下会被当成终止异常
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
+    $rel = Get-RelativeRepoPath $Path
+    $headSha = (@(& $script:Git -C $script:RepoRoot log -1 --format=%H -- $rel 2>$null) -join '').Trim()
+    $tracked = -not [string]::IsNullOrWhiteSpace($headSha)
+
+    $added = 0
+    $removed = 0
+    $effective = 0
+    $diffLines = @()
+
+    if ($tracked) {
+        $numstat = @(& $script:Git -C $script:RepoRoot -c core.quotepath=false diff --numstat HEAD -- $rel 2>$null)
+        foreach ($line in $numstat) {
+            if ($line -match '^(\d+|-)\s+(\d+|-)\s+') {
+                if ($Matches[1] -ne '-') { $added += [int]$Matches[1] }
+                if ($Matches[2] -ne '-') { $removed += [int]$Matches[2] }
+            }
+        }
+        if (($added + $removed) -gt 0) {
+            $diffLines = @(& $script:Git -C $script:RepoRoot -c core.quotepath=false diff --unified=0 HEAD -- $rel 2>$null)
+
+            # 忽略空白与换行符差异后还剩多少改动：用来识别「Obsidian 保存只是把 CRLF 换成了 LF」
+            $effStat = @(& $script:Git -C $script:RepoRoot -c core.quotepath=false diff --numstat -w --ignore-cr-at-eol HEAD -- $rel 2>$null)
+            foreach ($line in $effStat) {
+                if ($line -match '^(\d+|-)\s+(\d+|-)\s+') {
+                    if ($Matches[1] -ne '-') { $effective += [int]$Matches[1] }
+                    if ($Matches[2] -ne '-') { $effective += [int]$Matches[2] }
+                }
+            }
+        }
+    } else {
+        # 新文件：还没进过仓库，按新增行数统计
+        $content = @(Get-Content -LiteralPath $Path -Encoding UTF8 -ErrorAction SilentlyContinue)
+        $added = $content.Count
+    }
+
+    $oldTitle = ''
+    $newTitle = ''
+    foreach ($l in $diffLines) {
+        if ($l -match '^-title:\s*(.+?)\s*$') { $oldTitle = $Matches[1].Trim().Trim('"').Trim("'") }
+        elseif ($l -match '^\+title:\s*(.+?)\s*$') { $newTitle = $Matches[1].Trim().Trim('"').Trim("'") }
+    }
+    $titleChanged = ($oldTitle -ne '' -and $newTitle -ne '' -and $oldTitle -ne $newTitle)
+    $ErrorActionPreference = $prevEap
+
+    return [pscustomobject]@{
+        Tracked        = $tracked
+        Added          = $added
+        Removed        = $removed
+        Changed        = ((-not $tracked) -or (($added + $removed) -gt 0))
+        FormattingOnly = ($tracked -and (($added + $removed) -gt 0) -and ($effective -eq 0))
+        OldTitle       = $oldTitle
+        NewTitle       = $newTitle
+        TitleChanged   = $titleChanged
+    }
+}
+
 function Show-PostPicker {
-    param([switch]$Single)
+    param(
+        [switch]$Single,
+        [string]$Caption = '选择要发布的文章',
+        [string]$Prompt = '要发布哪些文章？',
+        [switch]$SortByDate,
+        [switch]$ShowPublished
+    )
 
     $postFiles = @(Get-ChildItem -LiteralPath $script:PostsDir -Filter '*.md' -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending)
     if ($postFiles.Count -eq 0) { Fail 'source/_posts 下没有 Markdown 文章。' }
 
+    if ($SortByDate) {
+        $postFiles = @($postFiles | Sort-Object { Get-PostDate $_.FullName } -Descending)
+    }
+
     $statusMap = Get-PostStatusMap
+    $publishedSet = $null
+    if ($ShowPublished) { $publishedSet = Get-PublishedPostSet }
+
     Write-Host ''
     Write-Host '========================================' -ForegroundColor Cyan
-    Write-Host '  选择要发布的文章' -ForegroundColor Cyan
+    Write-Host ("  {0}" -f $Caption) -ForegroundColor Cyan
     Write-Host '========================================' -ForegroundColor Cyan
     Write-Host '  [新] 新文章   [改] 已修改   [  ] 无改动' -ForegroundColor DarkGray
     Write-Host ''
@@ -363,12 +466,18 @@ function Show-PostPicker {
         $fileName = [IO.Path]::GetFileNameWithoutExtension($full)
         $label = $title
         if ($title -ne $fileName) { $label = "$title  [$fileName]" }
-        Write-Host ("{0,3}. {1} {2}  {3}" -f ($i + 1), $status, $date, $label) -ForegroundColor $color
+
+        $mark = ''
+        if ($publishedSet) {
+            $key = (Get-RelativeRepoPath $full).Replace('/', '\').ToLowerInvariant()
+            if ($publishedSet.ContainsKey($key)) { $mark = '  已发布' } else { $mark = '  未发布' }
+        }
+        Write-Host ("{0,3}. {1} {2}  {3}{4}" -f ($i + 1), $status, $date, $label, $mark) -ForegroundColor $color
     }
 
     Write-Host ''
     Write-Host '输入编号：1,3,5 或 1-3；a = 全选；0 = 取消' -ForegroundColor Cyan
-    $answer = Read-Host '要发布哪些文章？'
+    $answer = [string](Read-Host $Prompt)
     if ([string]::IsNullOrWhiteSpace($answer) -or $answer.Trim() -eq '0') {
         return @()
     }
@@ -752,6 +861,101 @@ function Set-CoverInteractive {
 }
 
 # ---------------------------------------------------------------------------
+# 修改已发布文章
+# ---------------------------------------------------------------------------
+function Open-InEditor {
+    param([string]$Path)
+
+    # 优先 Obsidian（文章的图床/双链都在库里），失败再用系统默认程序，最后记事本
+    try {
+        Start-Process ("obsidian://open?path=" + [Uri]::EscapeDataString($Path))
+        Write-Log '已用 Obsidian 打开。' 'INFO'
+        return $true
+    } catch { }
+
+    try {
+        Start-Process -FilePath $Path
+        Write-Log '已用系统默认程序打开。' 'INFO'
+        return $true
+    } catch { }
+
+    try {
+        Start-Process notepad.exe -ArgumentList $Path
+        Write-Log '已回退到记事本打开。' 'WARN'
+        return $true
+    } catch {
+        Write-Log ("无法自动打开编辑器，请手动打开：{0}" -f $Path) 'WARN'
+        return $false
+    }
+}
+
+function Edit-BlogPost {
+    $picked = @(Show-PostPicker -Single -SortByDate -ShowPublished `
+            -Caption '选择要修改的文章' -Prompt '要修改哪一篇？（输入编号）')
+    if ($picked.Count -eq 0) {
+        Write-Log '没有选择文章，已取消。' 'WARN'
+        return $null
+    }
+
+    $path = $picked[0]
+    if (-not (Test-Path -LiteralPath $path)) { Fail "文章不存在：$path" }
+
+    $title = Get-PostTitle $path
+    Write-Log ("准备修改：{0}" -f $title) 'INFO'
+    Write-Log ("文件：{0}" -f $path) 'INFO'
+
+    $null = Open-InEditor $path
+
+    $emptyRounds = 0
+    while ($true) {
+        Write-Host ''
+        Write-Host '── 在编辑器里改完后，务必先保存（Obsidian 一般会自动保存）──' -ForegroundColor Cyan
+        $answer = [string](Read-Host 'Enter = 保存好了，继续发布；r = 重新打开编辑器；q = 取消').Trim()
+
+        if ($answer -match '^(q|quit|n|no|取消|0)$') {
+            Write-Log '已取消，没有提交任何内容。' 'WARN'
+            return $null
+        }
+        if ($answer -match '^(r|reopen|e)$') {
+            $null = Open-InEditor $path
+            continue
+        }
+
+        $summary = Get-PostChangeSummary $path
+        if (-not $summary.Changed) {
+            $emptyRounds++
+            Write-Log '没有检测到这篇文章有任何改动。' 'WARN'
+            if ($emptyRounds -ge 2) {
+                Write-Log '连续两次都没检测到改动，已退出（未提交）。' 'ERROR'
+                return $null
+            }
+            $again = [string](Read-Host '可能还没保存：r = 重新打开编辑器，Enter = 放弃').Trim()
+            if ($again -match '^(r|reopen|e)$') { $null = Open-InEditor $path }
+            else { return $null }
+            continue
+        }
+
+        Write-Log ("检测到改动：+{0} 行 / -{1} 行" -f $summary.Added, $summary.Removed) 'OK'
+        if ($summary.FormattingOnly) {
+            Write-Log '注意：忽略空白/换行符差异后内容其实没变，线上文字不会有变化。' 'WARN'
+            Write-Log '如果你刚改的内容没出现，多半是编辑器还没保存。' 'WARN'
+        }
+
+        if ($summary.TitleChanged) {
+            Write-Log ("标题被改了：'{0}' -> '{1}'" -f $summary.OldTitle, $summary.NewTitle) 'WARN'
+            Write-Log 'Hexo 的文章地址由标题生成，改标题会让线上旧链接失效（404）。' 'WARN'
+            $keep = [string](Read-Host '仍要继续发布吗？[Y/n]').Trim()
+            if ($keep -match '^[Nn]') {
+                Write-Log '已取消。建议保持 front matter 的 title 不变，只改正文。' 'WARN'
+                return $null
+            }
+        }
+
+        return $path
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 新建文章
 # ---------------------------------------------------------------------------
 function New-BlogPost {
@@ -782,17 +986,7 @@ function New-BlogPost {
     Write-Log "已创建：$path" 'OK'
     Write-Log '请写完后重新运行脚本，选择「从列表选择文章发布」。' 'INFO'
 
-    try {
-        Start-Process "obsidian://open?path=$([Uri]::EscapeDataString($path))"
-        Write-Log '已尝试用 Obsidian 打开。' 'INFO'
-    } catch {
-        try {
-            Start-Process notepad.exe -ArgumentList $path
-            Write-Log 'Obsidian 未打开，已回退到记事本。' 'WARN'
-        } catch {
-            Write-Log "请手动打开：$path" 'WARN'
-        }
-    }
+    $null = Open-InEditor $path
     return $path
 }
 
@@ -902,13 +1096,14 @@ function Show-Menu {
     Write-Host '  Clouds-remain 一键发布' -ForegroundColor Cyan
     Write-Host '========================================' -ForegroundColor Cyan
     Write-Host '  1. 从列表选择文章发布'
-    Write-Host '  2. 发布全部改动文章'
-    Write-Host '  3. 新建文章（创建后打开编辑器）'
-    Write-Host '  4. 设置/更换文章封面并发布'
-    Write-Host '  5. 只构建预览，不发布'
-    Write-Host '  6. 退出'
+    Write-Host '  2. 修改已发布文章（改完再发布）' -ForegroundColor Yellow
+    Write-Host '  3. 发布全部改动文章'
+    Write-Host '  4. 新建文章（创建后打开编辑器）'
+    Write-Host '  5. 设置/更换文章封面并发布'
+    Write-Host '  6. 只构建预览，不发布'
+    Write-Host '  7. 退出'
     Write-Host ''
-    return (Read-Host '请选择 [1-6]')
+    return (Read-Host '请选择 [1-7]')
 }
 
 # ---------------------------------------------------------------------------
@@ -924,25 +1119,37 @@ try {
     Acquire-Lock
 
     $mode = 'publish'
-    if (-not $Title -and -not $New -and -not $File -and -not $All -and -not $Pick -and -not $CoverImage -and -not $CoverInteractive -and -not $BuildOnly -and -not $DryRun -and -not $NoPush) {
+    if (-not $Title -and -not $New -and -not $Edit -and -not $File -and -not $All -and -not $Pick -and -not $CoverImage -and -not $CoverInteractive -and -not $BuildOnly -and -not $DryRun -and -not $NoPush) {
         $choice = Show-Menu
         switch ($choice) {
             '1' { $mode = 'publish'; $script:UsePicker = $true }
-            '2' { $mode = 'publish' }
-            '3' { $null = New-BlogPost; return }
-            '4' {
+            '2' { $mode = 'edit' }
+            '3' { $mode = 'publish' }
+            '4' { $null = New-BlogPost; return }
+            '5' {
                 $coverPost = Set-CoverInteractive
                 if (-not $coverPost) { return }
                 $File = @($coverPost)
                 $mode = 'publish'
             }
-            '5' { $mode = 'build-only' }
+            '6' { $mode = 'build-only' }
             default { Write-Log '已退出。' 'INFO'; return }
         }
     }
 
     if ($BuildOnly) {
         $mode = 'build-only'
+    }
+
+    if ($Edit) {
+        $mode = 'edit'
+    }
+
+    if ($mode -eq 'edit') {
+        $editedPost = Edit-BlogPost
+        if (-not $editedPost) { return }
+        $File = @($editedPost)
+        $script:CommitAction = 'edit'
     }
 
     if ($CoverInteractive) {
@@ -1044,7 +1251,10 @@ try {
     }
 
     if (-not $alreadyCommitted) {
-        $message = if ($titles.Count -eq 1) { "post: $commitTitle" } else { "posts: $commitTitle" }
+        if ($script:CommitAction -eq 'edit') { $prefix = 'edit' }
+        elseif ($titles.Count -eq 1) { $prefix = 'post' }
+        else { $prefix = 'posts' }
+        $message = "${prefix}: $commitTitle"
 
         $userName = (& $script:Git -C $script:RepoRoot config user.name 2>$null).Trim()
         $userEmail = (& $script:Git -C $script:RepoRoot config user.email 2>$null).Trim()

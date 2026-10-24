@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $script:RepoRoot = Split-Path -Parent $PSScriptRoot
 $script:Core = Join-Path $PSScriptRoot 'publish.ps1'
 $script:Icon = Join-Path $PSScriptRoot 'publisher-v3.ico'
-$script:Version = '1.1.0'
+$script:Version = '1.2.0'
 $script:PowerShell = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
 if (-not $script:PowerShell) { $script:PowerShell = Join-Path $PSHOME 'powershell.exe' }
 
@@ -44,17 +44,18 @@ function Show-Menu {
     Write-Host ''
     Write-Host '  ── 发布 ───────────────────────────────────────────────' -ForegroundColor DarkGray
     Write-Host '   [1]  从列表选择文章发布' -ForegroundColor White
-    Write-Host '   [2]  发布全部改动文章' -ForegroundColor White
-    Write-Host '   [3]  新建文章' -ForegroundColor White
-    Write-Host '   [4]  设置/更换文章封面并发布' -ForegroundColor White
+    Write-Host '   [2]  修改已发布文章（改完再发布）' -ForegroundColor Yellow
+    Write-Host '   [3]  发布全部改动文章' -ForegroundColor White
+    Write-Host '   [4]  新建文章' -ForegroundColor White
+    Write-Host '   [5]  设置/更换文章封面并发布' -ForegroundColor White
     Write-Host ''
     Write-Host '  ── 工具 ───────────────────────────────────────────────' -ForegroundColor DarkGray
-    Write-Host '   [5]  只构建预览，不发布' -ForegroundColor Gray
-    Write-Host '   [6]  查看最近发布日志' -ForegroundColor Gray
-    Write-Host '   [7]  打开博客目录' -ForegroundColor Gray
-    Write-Host '   [8]  打开线上网站' -ForegroundColor Gray
-    Write-Host '   [9]  检查环境与仓库状态' -ForegroundColor Gray
-    Write-Host '  [10]  创建/更新桌面快捷方式' -ForegroundColor Gray
+    Write-Host '   [6]  只构建预览，不发布' -ForegroundColor Gray
+    Write-Host '   [7]  查看最近发布日志' -ForegroundColor Gray
+    Write-Host '   [8]  打开博客目录' -ForegroundColor Gray
+    Write-Host '   [9]  打开线上网站' -ForegroundColor Gray
+    Write-Host '  [10]  检查环境与仓库状态' -ForegroundColor Gray
+    Write-Host '  [11]  创建/更新桌面快捷方式' -ForegroundColor Gray
     Write-Host ''
     Write-Host '   [0]  退出' -ForegroundColor DarkYellow
     Write-Host ''
@@ -193,19 +194,20 @@ try {
 
         switch ($choice) {
             '1' { Invoke-Core @('-Pick') }
-            '2' { Invoke-Core @('-All') }
-            '3' { Invoke-Core @('-New') }
-            '4' { Invoke-Core @('-CoverInteractive') }
-            '5' { Invoke-Core @('-BuildOnly') }
-            '6' { Show-RecentLogs }
-            '7' {
+            '2' { Invoke-Core @('-Edit') }
+            '3' { Invoke-Core @('-All') }
+            '4' { Invoke-Core @('-New') }
+            '5' { Invoke-Core @('-CoverInteractive') }
+            '6' { Invoke-Core @('-BuildOnly') }
+            '7' { Show-RecentLogs }
+            '8' {
                 try { Start-Process explorer.exe -ArgumentList $script:RepoRoot } catch { Write-Host $_.Exception.Message -ForegroundColor Red }
             }
-            '8' {
+            '9' {
                 try { Start-Process 'https://clouds-remain.github.io/' } catch { Write-Host $_.Exception.Message -ForegroundColor Red }
             }
-            '9' { Show-Status }
-            '10' { Install-Shortcut }
+            '10' { Show-Status }
+            '11' { Install-Shortcut }
             '0' {
                 Write-Host ''
                 Write-Host '已退出发布中心。' -ForegroundColor DarkGray
