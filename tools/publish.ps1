@@ -414,6 +414,28 @@ function Get-PostChangeSummary {
     }
 }
 
+# 按 permalink 规则（:year/:month/:day/:title/）推算线上地址
+function Get-PostUrl {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+
+    $lines = @(Get-Content -LiteralPath $Path -TotalCount 40 -Encoding UTF8)
+    $dateText = ''
+    $slug = ''
+    foreach ($line in $lines) {
+        if ($line -match '^date:\s*(.+?)\s*$') { $dateText = $Matches[1].Trim().Trim('"').Trim("'") }
+        elseif ($line -match '^slug:\s*(.+?)\s*$') { $slug = $Matches[1].Trim().Trim('"').Trim("'") }
+    }
+    if (-not $slug) { $slug = [IO.Path]::GetFileNameWithoutExtension($Path) }
+
+    $dt = [datetime]::MinValue
+    if ($dateText -and [datetime]::TryParse($dateText, [ref]$dt)) { }
+    else { $dt = (Get-Item -LiteralPath $Path).LastWriteTime }
+
+    return ('https://clouds-remain.github.io/{0}/{1}/' -f $dt.ToString('yyyy/MM/dd'), [Uri]::EscapeDataString($slug))
+}
+
 function Show-PostPicker {
     param(
         [switch]$Single,
@@ -1297,6 +1319,10 @@ try {
     Write-Log '推送成功。' 'OK'
     Write-Log "提交：$commitSha" 'INFO'
     Write-Log "Actions：$repoUrl/actions" 'INFO'
+    if ($posts.Count -eq 1) {
+        $postUrl = Get-PostUrl $posts[0]
+        if ($postUrl) { Write-Log "文章地址（Actions 完成后生效）：$postUrl" 'INFO' }
+    }
     Write-Log 'GitHub Actions 会自动构建并部署。' 'INFO'
     Write-Log ("耗时：{0:N1} 秒" -f ((Get-Date) - $script:StartTime).TotalSeconds) 'INFO'
 } catch {
