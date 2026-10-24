@@ -815,6 +815,15 @@ function Stop-RebaseIfNeeded {
     }
 }
 
+function Remove-MirrorRemote {
+    # 先判断再删除：PS 5.1 在 $ErrorActionPreference='Stop' 时，
+    # 原生命令写到 stderr 的内容会变成终止性异常，2>$null 挡不住。
+    $remotes = @(& $script:Git -C $script:RepoRoot remote 2>$null)
+    if ($remotes -contains '__publish_mirror') {
+        $null = & $script:Git -C $script:RepoRoot remote remove __publish_mirror
+    }
+}
+
 function Invoke-Pull {
     $env:GCM_INTERACTIVE = 'never'
     $env:GIT_TERMINAL_PROMPT = '0'
@@ -831,10 +840,11 @@ function Invoke-Pull {
     }
 
     $mirrorUrl = "https://ghproxy.net/https://github.com/$($slug[0])/$($slug[1]).git"
-    $null = & $script:Git -C $script:RepoRoot remote remove __publish_mirror 2>$null
-    $null = & $script:Git -C $script:RepoRoot remote add __publish_mirror $mirrorUrl 2>$null
 
     try {
+        Remove-MirrorRemote
+        $null = & $script:Git -C $script:RepoRoot remote add __publish_mirror $mirrorUrl
+
         $code = Invoke-Native $script:Git @('-C', $script:RepoRoot, 'fetch', '__publish_mirror', 'main') 'git fetch mirror'
         if ($code -ne 0) { return $false }
 
@@ -849,7 +859,7 @@ function Invoke-Pull {
         $null = & $script:Git -C $script:RepoRoot update-ref refs/remotes/origin/main $mirrorHead 2>$null
         return $true
     } finally {
-        $null = & $script:Git -C $script:RepoRoot remote remove __publish_mirror 2>$null
+        Remove-MirrorRemote
     }
 }
 
@@ -1055,9 +1065,7 @@ try {
 
     Write-Log '同步远端 ...' 'STEP'
     if (-not (Invoke-Pull $commitSha)) {
-        Write-Log '无法同步远端；本地提交已保留，未推送。' 'ERROR'
-        Save-RescueBundle '拉取远端失败'
-        exit 3
+        Write-Log '直连与镜像都拉不下来，改为直接尝试推送。远端若有新提交，推送会被拒绝（不会覆盖）。' 'WARN'
     }
 
     $afterHead = (& $script:Git -C $script:RepoRoot rev-parse HEAD).Trim()
