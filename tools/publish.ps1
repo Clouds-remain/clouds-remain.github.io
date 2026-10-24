@@ -499,6 +499,132 @@ function Test-Posts {
     }
 }
 
+# ---------------------------------------------------------------------------
+# 远端图床本地化
+# 国内直连 raw.githubusercontent.com 不通，GitHub 图床链接会显示成裂图。
+# 发布前把这些图片下载进仓库（source/images/posts/<文章名>/），正文改成本地路径。
+# ---------------------------------------------------------------------------
+
+function Get-GitHubRawParts {
+    param([string]$Url)
+
+    $patterns = @(
+        '^https?://github\.com/(?<owner>[^/]+)/(?<repo>[^/]+)/raw/(?<branch>[^/]+)/(?<path>.+)$',
+        '^https?://raw\.githubusercontent\.com/(?<owner>[^/]+)/(?<repo>[^/]+)/(?<branch>[^/]+)/(?<path>.+)$'
+    )
+
+    foreach ($pattern in $patterns) {
+        $m = [regex]::Match($Url, $pattern, 'IgnoreCase')
+        if ($m.Success) {
+            return @{
+                Owner  = $m.Groups['owner'].Value
+                Repo   = $m.Groups['repo'].Value
+                Branch = $m.Groups['branch'].Value
+                Path   = [uri]::UnescapeDataString($m.Groups['path'].Value)
+            }
+        }
+    }
+    return $null
+}
+
+function Save-RemoteImage {
+    param(
+        [hashtable]$Parts,
+        [string]$Destination
+    )
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    $headers = @{
+        'User-Agent' = 'Clouds-remain-publisher'
+        'Accept'     = 'application/vnd.github+json'
+    }
+    if ($env:GITHUB_TOKEN) {
+        $headers['Authorization'] = "Bearer $env:GITHUB_TOKEN"
+    }
+
+    # 走 api.github.com（国内可达），按路径分段转义，避免中文/空格出错
+    $escaped = (($Parts.Path.Split('/')) | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
+    $infoUrl = 'https://api.github.com/repos/{0}/{1}/contents/{2}?ref={3}' -f $Parts.Owner, $Parts.Repo, $escaped, $Parts.Branch
+    $info = Invoke-RestMethod -Uri $infoUrl -Headers $headers -TimeoutSec 30 -ErrorAction Stop
+    if (-not $info.sha) { return $false }
+
+    $blobUrl = 'https://api.github.com/repos/{0}/{1}/git/blobs/{2}' -f $Parts.Owner, $Parts.Repo, $info.sha
+    $blob = Invoke-RestMethod -Uri $blobUrl -Headers $headers -TimeoutSec 60 -ErrorAction Stop
+    if (-not $blob.content) { return $false }
+
+    $bytes = [Convert]::FromBase64String(($blob.content -replace '\s', ''))
+    if (-not $bytes -or $bytes.Length -eq 0) { return $false }
+
+    $dir = Split-Path -Parent $Destination
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+    [IO.File]::WriteAllBytes($Destination, $bytes)
+    return $true
+}
+
+function Resolve-RemoteImages {
+    param([string[]]$Posts)
+
+    foreach ($post in $Posts) {
+        if (-not (Test-Path -LiteralPath $post)) { continue }
+
+        $content = Get-Content -LiteralPath $post -Raw -Encoding UTF8
+        $name = Split-Path $post -Leaf
+
+        if ($content -match '!\[\[') {
+            Write-Log ("{0} 使用了 Obsidian 双链图片 ![[...]]，Hexo 无法渲染，请改成 ![说明](路径)。" -f $name) 'WARN'
+        }
+
+        $matches = [regex]::Matches($content, '!\[([^\]]*)\]\((https?://[^)\s]+)\)')
+        if ($matches.Count -eq 0) { continue }
+
+        $slug = [IO.Path]::GetFileNameWithoutExtension($post)
+        $newContent = $content
+        $localized = 0
+
+        foreach ($m in $matches) {
+            $url = $m.Groups[2].Value
+            $parts = Get-GitHubRawParts $url
+            if (-not $parts) {
+                Write-Log ("非 GitHub 图床链接，保持原样：{0}" -f $url) 'WARN'
+                continue
+            }
+
+            $fileName = [IO.Path]::GetFileName($parts.Path)
+            if (-not $fileName) { continue }
+
+            $dir = Join-Path $script:ImagesDir ('posts\{0}' -f $slug)
+            $dest = Join-Path $dir $fileName
+
+            if (-not (Test-Path -LiteralPath $dest)) {
+                $ok = $false
+                try {
+                    $ok = Save-RemoteImage -Parts $parts -Destination $dest
+                } catch {
+                    Write-Log ("图片下载失败：{0}（{1}）" -f $url, $_.Exception.Message) 'WARN'
+                    continue
+                }
+                if (-not $ok) {
+                    Write-Log ("图片下载失败：{0}" -f $url) 'WARN'
+                    continue
+                }
+                Write-Log ("已下载图片：{0}" -f $fileName) 'INFO'
+            }
+
+            $newUrl = '/images/posts/{0}/{1}' -f $slug, $fileName
+            $newContent = $newContent.Replace($url, $newUrl)
+            $localized++
+        }
+
+        if ($localized -gt 0) {
+            [IO.File]::WriteAllText($post, $newContent, (New-Object System.Text.UTF8Encoding($false)))
+            Write-Log ("{0}：已本地化 {1} 张图床图片，改写为仓库内路径。" -f $name, $localized) 'OK'
+        }
+    }
+}
+
 function Get-RelatedImages {
     param([string[]]$Posts)
 
@@ -849,6 +975,7 @@ try {
     }
 
     Test-Posts $posts
+    Resolve-RemoteImages $posts
     $images = Get-RelatedImages $posts
 
     $titles = @()
