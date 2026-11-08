@@ -29,6 +29,6 @@
     "shokax-uikit": "^0.0.5"
   },
   "devDependencies": {
-    "pagefind": "^1.5.2"
+    "pagefind": "^1.6.0"
   }
 }
